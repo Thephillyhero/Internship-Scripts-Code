@@ -1,30 +1,29 @@
 # Internship-Scripts-Code
 All the Code and Scripts that I used to complete this project
 .
-├── src/
-│   ├── simulation/
-│   │   ├── live_trading_simulator.py     # Main live trading & backtest script
-│   │   ├── rf_trainer.py                 # Trains Random Forest model
-│   │   ├── utils/                        # Utility functions for data handling & plots
-│   │
-│   ├── indicators/
-│   │   ├── RSI.py                        # Relative Strength Index calculation
-│   │   ├── LSM.py                        # Least Squares Method (trendline) calculation
-│   │   ├── RV.py                         # Rolling Volatility calculation
-│   │
-│   ├── archive/                          # Old or unused scripts kept for reference
-│   │   ├── historical_backtester.py
-│   │   ├── intraday_profit_tracker2.py
-│   │   └── alpaca_trade.py
+src/
+├── simulation/
+│ ├── live_trading_simulator.py # Main live trading & backtest script
+│ ├── rf_trainer.py # Trains Random Forest model
+│ └── utils/ # Utility functions for data handling & plots
 │
-├── data/                                 # Saved datasets and models
-│   ├── rf_trade_model.pkl                # Random Forest model (optional)
-│   └── live_trade_results.csv            # Trade logs
+├── indicators/
+│ ├── RSI.py # Relative Strength Index calculation
+│ ├── LSM.py # Least Squares Method (trendline) calculation
+│ └── RV.py # Rolling Volatility calculation
 │
-├── plots/                                # Saved trade plot images
+├── archive/ # Old or unused scripts kept for reference
+│ ├── historical_backtester.py
+│ ├── intraday_profit_tracker2.py
+│ └── alpaca_trade.py
 │
-├── README.md                             # Project documentation
-└── requirements.txt                      # Python dependencies
+├── data/ # Saved datasets and models
+│ ├── rf_trade_model.pkl # Random Forest model (optional)
+│ └── live_trade_results.csv # Trade logs
+│
+├── plots/ # Saved trade plot images
+├── README.md # Project documentation
+└── requirements.txt # Python dependencies
 
 1️⃣ Install Dependencies
 How to Run the Code - Make sure you have Python 3.10+ installed. Then, in the project root:
