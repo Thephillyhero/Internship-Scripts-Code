@@ -5,7 +5,7 @@ heikin_ashi.py
 Heikin-Ashi transform + simple trend detection.
 - Converts OHLC to Heikin-Ashi candles
 - Flags bullish/bearish stretches
-- Saves HA chart + summary CSV to results/indicators/heikin_ashi/
+- Saves HA chart + summary CSV to results/heikin_ashi/
 
 Examples:
   Daily bars (6mo):
@@ -89,7 +89,7 @@ def main():
     ap.add_argument("--ticker", default="TSLA")
     ap.add_argument("--period", default="6mo", help="e.g., 6mo, 1y, 5d")
     ap.add_argument("--interval", default="1d", help="e.g., 1d, 1h, 5m")
-    ap.add_argument("--out-dir", default="results/indicators/heikin_ashi", help="Output directory")
+    ap.add_argument("--out-dir", default="results/heikin_ashi", help="Output directory under results/")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
