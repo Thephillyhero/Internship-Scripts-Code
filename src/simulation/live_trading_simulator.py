@@ -309,8 +309,7 @@ def main():
     trades_all = []
 
     for ticker in args.tickers:
-        print(f"
-Fetching {ticker}...")
+        print(f"\nFetching {ticker}...")
         try:
             df = fetch_data(ticker, args.mode, args.interval, args.lookback, args.date, args.source)
             if df.empty:
