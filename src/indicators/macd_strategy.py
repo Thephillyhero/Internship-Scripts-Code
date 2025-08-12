@@ -5,7 +5,7 @@ macd_strategy.py
 Simple MACD backtest (daily or intraday) using yfinance.
 - Computes MACD (12, 26, 9)
 - Buy on MACD line crossing above signal; sell on crossing below (flat when out)
-- Saves equity curve plot + trade CSV to results/indicators/macd/
+- Saves equity curve plot + trade CSV to results/macd/
 
 Examples:
   Daily bars (1y):
@@ -71,25 +71,23 @@ def backtest_macd(df: pd.DataFrame) -> pd.DataFrame:
     out["strat_ret"] = out["long"].shift(1).fillna(0) * out["ret"]
     out["equity"] = (1 + out["strat_ret"]).cumprod()
 
+    # Pair up buys/sells
     trades = []
-    buy_iter = iter(buys)
-    sell_iter = iter(sells)
     open_buy = None
-
-    # Pair up buy/sell chronologically
     for ts in out.index:
         if open_buy is None and ts in buys:
             open_buy = ts
         elif open_buy is not None and ts in sells:
-            # close trade
             buy_ts = open_buy
             sell_ts = ts
             buy_px = float(out.at[buy_ts, "Close"])
             sell_px = float(out.at[sell_ts, "Close"])
             profit = sell_px - buy_px
-            trades.append({"buy_time": str(buy_ts), "buy_px": buy_px,
-                           "sell_time": str(sell_ts), "sell_px": sell_px,
-                           "profit": profit})
+            trades.append({
+                "buy_time": str(buy_ts), "buy_px": buy_px,
+                "sell_time": str(sell_ts), "sell_px": sell_px,
+                "profit": profit
+            })
             open_buy = None
 
     return out, pd.DataFrame(trades)
@@ -111,7 +109,7 @@ def main():
     ap.add_argument("--ticker", default="AAPL")
     ap.add_argument("--period", default="1y", help="e.g., 1y, 6mo, 5d")
     ap.add_argument("--interval", default="1d", help="e.g., 1d, 1h, 5m")
-    ap.add_argument("--out-dir", default="results/indicators/macd", help="Output directory")
+    ap.add_argument("--out-dir", default="results/macd", help="Output directory under results/")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
