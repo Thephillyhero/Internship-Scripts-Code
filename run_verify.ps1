@@ -1,5 +1,4 @@
-# Quick verify script for Windows PowerShell
-# Runs with the CURRENT repo layout & CLI flags
+# Quick verify script for Windows PowerShell (current CLI flags)
 
 # 1) Create/activate venv
 if (!(Test-Path ".venv")) {
@@ -16,7 +15,7 @@ New-Item -ItemType Directory -Force -Path results | Out-Null
 New-Item -ItemType Directory -Force -Path results\plots | Out-Null
 New-Item -ItemType Directory -Force -Path results\logs  | Out-Null
 
-# 4) Pick a recent weekday for backtest (yfinance needs a market day)
+# 4) Pick a recent weekday (avoid weekends)
 function Get-LastWeekday {
   $d = Get-Date
   for ($i = 1; $i -le 7; $i++) {
@@ -27,10 +26,9 @@ function Get-LastWeekday {
   }
 }
 $DATE = Get-LastWeekday
-
 Write-Host "Using backtest date: $DATE"
 
-# 5) Run a minimal backtest that matches your script's CLI
+# 5) Backtest with CURRENT flags
 python src\simulation\live_trading_simulator.py `
   --mode backtest `
   --tickers AAPL MSFT `
@@ -40,6 +38,9 @@ python src\simulation\live_trading_simulator.py `
   --date $DATE `
   --out-plots results\plots `
   --out-logs results\logs
+
+Write-Host "✅ Verify complete. Check results\plots and results\logs."
+
 
 Write-Host "✅ Verify complete. Check the results\plots and results\logs folders."
 
