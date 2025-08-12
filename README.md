@@ -1,69 +1,123 @@
-# Internship-Scripts-Code
-All the Code and Scripts that I used to complete this project
+# Internship Scripts & Code
+
+This repository contains all the code and scripts developed during my internship, organized for clarity and ease of use. It includes feature engineering tools, model training scripts, simulation environments, and supporting utilities.
+
+---
+
+## 📂 Project Structure
+
+```
 .
-src/
-├── simulation/
-│ ├── live_trading_simulator.py # Main live trading & backtest script
-│ ├── rf_trainer.py # Trains Random Forest model
-│ └── utils/ # Utility functions for data handling & plots
+├── README.md                     # This file
+├── requirements.txt               # Python dependencies
+├── run_verify.ps1                 # PowerShell verification script
+├── run_verify.sh                  # Bash verification script (for macOS/Linux)
 │
-├── indicators/
-│ ├── RSI.py # Relative Strength Index calculation
-│ ├── LSM.py # Least Squares Method (trendline) calculation
-│ └── RV.py # Rolling Volatility calculation
+├── src/
+│   ├── features/
+│   │   ├── engineering.py         # Feature engineering utilities
+│   │   ├── split_data.py          # Splits stock data into training, validation, and test sets
+│   │   └── __init__.py
+│   │
+│   ├── models/
+│   │   ├── random_forest/
+│   │   │   ├── Randomforest.py    # Random Forest model training script
+│   │   ├── LSM_linearization_script.py  # Linearizes stock data using Least Squares Method
+│   │   └── __init__.py
+│   │
+│   └── simulation/
+│       ├── live_trading_sim.py    # Live trading simulator script
+│       └── __init__.py
 │
-├── archive/ # Old or unused scripts kept for reference
-│ ├── historical_backtester.py
-│ ├── intraday_profit_tracker2.py
-│ └── alpaca_trade.py
-│
-├── data/ # Saved datasets and models
-│ ├── rf_trade_model.pkl # Random Forest model (optional)
-│ └── live_trade_results.csv # Trade logs
-│
-├── plots/ # Saved trade plot images
-├── README.md # Project documentation
-└── requirements.txt # Python dependencies
+└── archive/                       # Unused or older scripts stored here for reference
+```
 
-1️⃣ Install Dependencies
-How to Run the Code - Make sure you have Python 3.10+ installed. Then, in the project root:
+---
 
-  pip install -r requirements.txt
+## ⚙️ Setup Instructions
 
-2️⃣ Running Live Trading Mode (Market Hours Only)
+1. **Clone the repository**
 
-python src/simulation/live_trading_simulator.py --mode live
+   git clone https://github.com/Thephillyhero/Internship-Scripts-Code.git
+   cd Internship-Scripts-Code
+   ```
 
-3️⃣ Running Backtest Mode (Any Date)
+2. **Install dependencies**
 
-python src/simulation/live_trading_simulator.py --mode backtest --date YYYY-MM-DD
+   pip install -r requirements.txt
+   ```
 
-4️⃣ Training the Random Forest Model (Optional)
+3. **Verify environment** (optional, ensures all dependencies are installed and paths are correct)
 
-python src/simulation/rf_trainer.py
+   * On Windows:
 
-⚙️ Configuration
+     ```powershell
+     .\run_verify.ps1
+     ```
+   * On macOS/Linux:
 
-INTERVAL = "1m"            # Data interval
-LOOKBACK_MINUTES = 15      # Window for finding trades
-MIN_PROFIT_DOLLARS = 0.25  # Minimum profit to trigger a trade
-MODEL_PATH = "data/rf_trade_model.pkl"
+     ```bash
+     bash run_verify.sh
+     ```
 
-📊 Output Files
+---
 
-  Trade Logs: data/live_trade_results.csv
+## 🚀 How to Run the Code
 
-Trade Plots: Saved to /plots folder with buy/sell markers
+### Feature Engineering
 
-🗂 Archived Scripts
-The /archive folder contains older or unused scripts. These are not required for running the main tools but are kept for reference.
+#### split\_data.py
 
+Splits historical stock market data into **training**, **validation**, and **test** datasets for modeling.
 
+```bash
+python src/features/split_data.py
+```
 
+#### engineering.py
 
+Contains helper functions for generating additional features from raw stock data.
 
+```bash
+python src/features/engineering.py
+```
 
+---
 
+### Modeling
+
+#### Randomforest.py
+
+Trains a Random Forest model for predicting stock market trends based on engineered features.
+
+```bash
+python src/models/random_forest/Randomforest.py
+```
+
+#### LSM\_linearization\_script.py
+
+Uses the **Least Squares Method (LSM)** to linearize historical stock price trends for analysis or as model input.
+
+```bash
+python src/models/LSM_linearization_script.py
+```
+
+---
+
+### Simulation
+
+#### live\_trading\_sim.py
+
+Runs a live trading simulation using your trained model and real-time market data.
+
+```bash
+python src/simulation/live_trading_sim.py
+
+## 📌 Notes
+
+* The **archive/** folder contains older or unused scripts for reference.
+* Ensure you have a stable internet connection for scripts that fetch live or historical market data.
+* All scripts are designed to be **machine-independent** — you can run them on any system with Python and the required dependencies installed.
 
 
 
