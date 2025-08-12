@@ -1,66 +1,285 @@
-# run_verify.ps1 — robust date picker for intraday
-if (!(Test-Path ".venv")) { python -m venv .venv }
-. .\.venv\Scripts\Activate.ps1
-pip install --upgrade pip
-pip install -r requirements.txt
+#!/usr/bin/env python3
+"""
+Patched Live/Backtest Trading Simulator
+--------------------------------------
+- Fixes Yahoo Finance intraday backtest fetch by using *period*-based download
+  and then filtering locally to the requested date.
+- Works in both modes: --mode {live, backtest}
+- Produces plots and logs in user-provided output folders.
+- Optional RandomForest model gating (columns: Close, Volume, return).
 
-New-Item -ItemType Directory -Force -Path results\plots | Out-Null
-New-Item -ItemType Directory -Force -Path results\logs  | Out-Null
+CLI (examples):
+  Backtest intraday 5m for a prior weekday:
+    python src/simulation/live_trading_simulator.py \
+      --mode backtest --tickers AAPL MSFT --interval 5m \
+      --lookback 50 --min-profit 0.5 --date 2024-07-02 \
+      --out-plots results/plots --out-logs results/logs
 
-function Has-IntradayData($dateStr) {
-  try {
-    $out = python - <<PY
-import yfinance as yf, pandas as pd, sys
-t="AAPL"; interval="5m"; date="$dateStr"
-df = yf.download(t, period="7d", interval=interval, auto_adjust=False, progress=False)
-# filter to the date
-if not df.empty:
+  Live (during market hours):
+    python src/simulation/live_trading_simulator.py \
+      --mode live --tickers AAPL MSFT --interval 5m --lookback 50 \
+      --min-profit 0.5 --out-plots results/plots --out-logs results/logs
+
+Notes:
+- For model gating, pass --model-path to a joblib RandomForest trained on
+  columns [Close, Volume, return]. If not provided or load fails, the
+  simulator runs without model gating and will still log/plot trades.
+"""
+
+from __future__ import annotations
+import argparse
+import os
+from pathlib import Path
+from datetime import datetime, time as dtime
+import warnings
+
+import joblib
+import numpy as np
+import pandas as pd
+import yfinance as yf
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+# ----------------------------------------
+# Helpers
+# ----------------------------------------
+
+MARKET_OPEN = dtime(9, 30)
+MARKET_CLOSE = dtime(16, 0)
+
+
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def is_intraday_interval(interval: str) -> bool:
+    interval = interval.lower()
+    return any(s in interval for s in ["m", "h"]) and interval != "1d"
+
+
+def between_market_hours(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df.index, pd.DatetimeIndex) or df.empty:
+        return df
+    # If tz-aware, convert to local naive for .between_time
+    if df.index.tz is not None:
+        df = df.tz_convert(None)
+    try:
+        return df.between_time(MARKET_OPEN.strftime('%H:%M'), MARKET_CLOSE.strftime('%H:%M'))
+    except Exception:
+        return df
+
+
+def fetch_intraday_period_then_filter(ticker: str, interval: str, date_str: str, period: str = "7d") -> pd.DataFrame:
+    """Yahoo's intraday works more reliably with period-based queries.
+    We fetch a few days then filter to the specific yyyy-mm-dd locally.
+    """
+    df = yf.download(
+        ticker,
+        period=period,
+        interval=interval,
+        auto_adjust=False,
+        progress=False,
+    )
+    if df.empty:
+        return df
+    # Drop to naive for date filtering
     if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
         idx = df.index.tz_convert(None)
     else:
         idx = df.index
-    df = df.loc[idx.strftime("%Y-%m-%d") == date]
-print(1 if not df.empty else 0)
-PY
-    return [int]$out.Trim()
-  } catch { return 0 }
-}
+    mask = idx.strftime('%Y-%m-%d') == date_str
+    return df.loc[mask]
 
-# try last 10 weekdays for intraday
-$chosen = $null
-for ($i=1; $i -le 10; $i++) {
-  $cand = (Get-Date).AddDays(-$i)
-  if ($cand.DayOfWeek -eq "Saturday" -or $cand.DayOfWeek -eq "Sunday") { continue }
-  $ds = $cand.ToString("yyyy-MM-dd")
-  if (Has-IntradayData $ds) { $chosen = $ds; break }
-}
-if ($null -ne $chosen) {
-  Write-Host "Using intraday backtest date: $chosen"
-  $cmd = @(
-    "python", "src\simulation\live_trading_simulator.py",
-    "--mode","backtest",
-    "--tickers","AAPL","MSFT",
-    "--interval","5m",
-    "--lookback","50",
-    "--min-profit","0.5",
-    "--date",$chosen,
-    "--out-plots","results\plots",
-    "--out-logs","results\logs"
-  )
-  & $cmd
-} else {
-  # fallback: daily bars
-  $ds = (Get-Date).AddDays(-5).ToString("yyyy-MM-dd")
-  Write-Host "No safe intraday day found; falling back to daily on $ds"
-  python src\simulation\live_trading_simulator.py `
-    --mode backtest `
-    --tickers AAPL MSFT `
-    --interval 1d `
-    --lookback 50 `
-    --min-profit 0.5 `
-    --date $ds `
-    --out-plots results\plots `
-    --out-logs results\logs
-}
 
-Write-Host "✅ Verify complete. Check results\plots and results\logs."
+def fetch_data(ticker: str, mode: str, interval: str, lookback: int, date: str | None) -> pd.DataFrame:
+    """Fetches data according to mode/interval. Returns a DataFrame with DatetimeIndex.
+    - Intraday backtest: use period-based fetch then filter to the target date
+    - Daily backtest: 1y period, then take the day slice around date
+    - Live: recent period fetch (5d for intraday, 1y for daily)
+    """
+    if mode == "backtest":
+        if is_intraday_interval(interval):
+            if not date:
+                raise ValueError("--date is required for intraday backtest")
+            df = fetch_intraday_period_then_filter(ticker, interval, date)
+        else:
+            # Daily bars: pull 1y and slice a window ending at --date (if given) or just use last lookback bars
+            df = yf.download(ticker, period="1y", interval=interval, auto_adjust=False, progress=False)
+            if df.empty:
+                return df
+            if date:
+                # Keep rows up to the given date
+                if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+                    idx = df.index.tz_convert(None)
+                else:
+                    idx = df.index
+                mask = idx <= pd.to_datetime(date)
+                df = df.loc[mask]
+    else:  # live
+        period = "5d" if is_intraday_interval(interval) else "1y"
+        df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False)
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index)
+        except Exception:
+            pass
+    return df
+
+
+def apply_model_gate(model, df: pd.DataFrame) -> bool:
+    """Returns True if model predicts to allow a trade, False to skip.
+    Expects RandomForestClassifier trained on [Close, Volume, return].
+    Uses the latest bar as a simple feature vector.
+    If anything fails, returns True (do not gate).
+    """
+    if model is None:
+        return True
+    try:
+        if df.empty or any(col not in df.columns for col in ["Close", "Volume"]):
+            return True
+        ret = df["Close"].pct_change().fillna(0)
+        features = pd.DataFrame({
+            "Close": [float(df["Close"].iloc[-1])],
+            "Volume": [float(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0.0],
+            "return": [float(ret.iloc[-1])],
+        })
+        pred = int(model.predict(features)[0])
+        return pred == 1
+    except Exception as e:
+        warnings.warn(f"[ML gate error] {e}")
+        return True
+
+
+def find_trade(df: pd.DataFrame, lookback: int, min_profit: float) -> tuple[bool, dict | None]:
+    """Simple min->max swing inside the last `lookback` bars within market hours.
+    Returns (found, trade_dict).
+    """
+    if df.empty:
+        return False, None
+
+    # Focus on recent bars
+    tail = df.tail(lookback).copy()
+    tail = between_market_hours(tail)
+    if tail.empty or "Close" not in tail.columns:
+        return False, None
+
+    # Find min then subsequent max
+    min_idx = tail["Close"].idxmin()
+    min_price = float(tail.at[min_idx, "Close"])
+    after = tail.loc[min_idx:]
+    max_idx = after["Close"].idxmax()
+    max_price = float(after.at[max_idx, "Close"])
+
+    profit = max_price - min_price
+    if max_idx > min_idx and profit >= min_profit:
+        minutes_held = int((max_idx - min_idx).total_seconds() // 60)
+        return True, {
+            "buy_time": str(min_idx),
+            "buy_price": min_price,
+            "sell_time": str(max_idx),
+            "sell_price": max_price,
+            "profit": profit,
+            "minutes_held": minutes_held,
+        }
+    return False, None
+
+
+def plot_trade(df: pd.DataFrame, buy_ts: pd.Timestamp, sell_ts: pd.Timestamp, ticker: str, out_path: Path):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(df.index, df["Close"], label="Close")
+    ax.axvline(buy_ts, color="green", linestyle="--", label="Buy")
+    ax.axvline(sell_ts, color="red", linestyle="--", label="Sell")
+    ax.set_title(f"{ticker} — Trade window")
+    ax.grid(True)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+
+
+# ----------------------------------------
+# Main
+# ----------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Patched live/backtest trading simulator")
+    ap.add_argument("--mode", required=True, choices=["live", "backtest"], help="Run mode")
+    ap.add_argument("--tickers", nargs="+", default=["AAPL", "MSFT"], help="List of tickers")
+    ap.add_argument("--interval", default="5m", help="Yahoo interval, e.g., 1d, 1h, 5m")
+    ap.add_argument("--lookback", type=int, default=50, help="Number of recent bars to examine")
+    ap.add_argument("--min-profit", type=float, default=0.5, help="Min $ profit to log a trade")
+    ap.add_argument("--model-path", default=None, help="Optional path to joblib RF model")
+    ap.add_argument("--date", default=None, help="Backtest date YYYY-MM-DD (required for intraday backtest)")
+    ap.add_argument("--out-plots", default="results/plots", help="Folder to save plots")
+    ap.add_argument("--out-logs", default="results/logs", help="Folder to save CSV logs")
+    args = ap.parse_args()
+
+    out_plots = Path(args.out_plots); ensure_dir(out_plots)
+    out_logs = Path(args.out_logs); ensure_dir(out_logs)
+
+    # Load model if provided
+    model = None
+    if args.model_path:
+        try:
+            model = joblib.load(args.model_path)
+            print(f"✅ Loaded model: {args.model_path}")
+        except Exception as e:
+            warnings.warn(f"[WARN] Failed to load model: {e}. Continuing without ML gating.")
+
+    trades_all = []
+
+    for ticker in args.tickers:
+        print(f"\nFetching {ticker}...")
+        try:
+            df = fetch_data(ticker, args.mode, args.interval, args.lookback, args.date)
+            if df.empty:
+                print(f"[WARN] No data for {ticker}.")
+                continue
+
+            if not apply_model_gate(model, df):
+                print("[ML] Model gate: skip trade for now.")
+                continue
+
+            found, trade = find_trade(df, args.lookback, args.min_profit)
+            if not found:
+                print(f"No qualifying trade for {ticker} in the last {args.lookback} bars.")
+                continue
+
+            # Log & plot
+            buy_ts = pd.to_datetime(trade["buy_time"])
+            sell_ts = pd.to_datetime(trade["sell_time"])
+            print(
+                f"✅ Trade {ticker}: Buy ${trade['buy_price']:.2f} at {buy_ts.time()} → "
+                f"Sell ${trade['sell_price']:.2f} at {sell_ts.time()} | Profit ${trade['profit']:.2f} "
+                f"(held {trade['minutes_held']}m)"
+            )
+
+            plot_file = out_plots / f"{ticker}_{args.mode}_{args.interval}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            plot_trade(df.tail(args.lookback), buy_ts, sell_ts, ticker, plot_file)
+
+            trades_all.append({"ticker": ticker, **trade})
+        except Exception as e:
+            warnings.warn(f"[ERROR] {ticker}: {e}")
+            continue
+
+    # Save trades CSV
+    if trades_all:
+        df_trades = pd.DataFrame(trades_all)
+        csv_file = out_logs / "trades.csv"
+        # Append if exists
+        if csv_file.exists():
+            old = pd.read_csv(csv_file)
+            df_trades = pd.concat([old, df_trades], ignore_index=True)
+        df_trades.to_csv(csv_file, index=False)
+        print(f"Saved trades -> {csv_file}")
+    else:
+        print("No trades found this run.")
+
+
+if __name__ == "__main__":
+    # Quiet some yfinance noisy warnings
+    warnings.simplefilter("ignore", category=UserWarning)
+    main()
