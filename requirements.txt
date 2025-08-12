@@ -5,3 +5,10 @@ scikit-learn==1.4.2
 matplotlib==3.8.4
 python-dotenv==1.0.1
 pytz==2024.1
+
+⬇️ requirements-tf.txt (optional; only if you’ll run the LSM experiment)
+Install base deps first:
+pip install -r requirements.txt
+Then, only if you plan to run src/experiments/lsm_linearization.py:
+tensorflow>=2.12
+scikit-learn>=1.3
