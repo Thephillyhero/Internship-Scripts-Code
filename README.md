@@ -1,123 +1,123 @@
-# Internship Scripts & Code
+A reproducible toolkit for market signal exploration and a lightweight ML-gated trading simulator. It’s designed to be data-source agnostic (Yahoo Finance for intraday when available, Stooq daily fallback for reliability), with simple, explainable features and CLI-first scripts so anyone can run it on a clean machine.
 
-This repository contains all the code and scripts developed during my internship, organized for clarity and ease of use. It includes feature engineering tools, model training scripts, simulation environments, and supporting utilities.
+Note: Educational project. Nothing here is financial advice.
 
----
+Goals
+I’m testing whether a small, explainable ML gate can select trades that are more able, accurate, and trustworthy than luck or simple baselines. Indicators (Heikin-Ashi, MACD) generate candidates; a Random Forest trained on Close, Volume, and simple return filters when to act. Everything logs to CSVs and plots so results are inspectable.
 
-## 📂 Project Structure
+Internship-Scripts-Code/
+├─ README.md
+├─ requirements.txt
+├─ (optional) requirements-tf.txt          # only if you’ll run the LSM experiment
+├─ data/
+│  └─ rf_trade_model.pkl                   # created after training (not pre-committed)
+├─ results/                                # auto-created (plots & logs)
+│  ├─ plots/
+│  └─ logs/
+├─ src/
+│  ├─ data/
+│  │  └─ fetch_data.py                     # download OHLCV to CSVs (Yahoo→Stooq)
+│  ├─ experiments/
+│  │  └─ lsm_linearization.py              # optional LSM + LSTM experiment
+│  ├─ features/
+│  │  └─ engineering.py                    # small helpers (imported by others)
+│  ├─ indicators/
+│  │  ├─ heikin_ashi.py                    # build HA candles; trend flips
+│  │  └─ macd_strategy.py                  # MACD crossover backtest
+│  ├─ models/
+│  │  └─ random_forest/
+│  │     └─ Randomforest.py                # train RF on Close/Volume/return
+│  └─ simulation/
+│     └─ live_trading_simulator.py         # backtest/live with ML gate + plots
+└─ scripts/
+   ├─ run_verify.ps1                       # optional convenience script (Windows)
+   └─ run_verify.sh                        # optional (macOS/Linux)
 
-```
-.
-├── README.md                     # This file
-├── requirements.txt               # Python dependencies
-├── run_verify.ps1                 # PowerShell verification script
-├── run_verify.sh                  # Bash verification script (for macOS/Linux)
-│
-├── src/
-│   ├── features/
-│   │   ├── engineering.py         # Feature engineering utilities
-│   │   ├── split_data.py          # Splits stock data into training, validation, and test sets
-│   │   └── __init__.py
-│   │
-│   ├── models/
-│   │   ├── random_forest/
-│   │   │   ├── Randomforest.py    # Random Forest model training script
-│   │   ├── LSM_linearization_script.py  # Linearizes stock data using Least Squares Method
-│   │   └── __init__.py
-│   │
-│   └── simulation/
-│       ├── live_trading_sim.py    # Live trading simulator script
-│       └── __init__.py
-│
-└── archive/                       # Unused or older scripts stored here for reference
-```
+   Prereqs & Setup
+Python 3.10+ (Windows/macOS/Linux)
 
----
+Internet access (for data fetching)
 
-## ⚙️ Setup Instructions
+Create a virtual environment and install deps.
 
-1. **Clone the repository**
+Windows (PowerShell)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install -r requirements-tf.txt
 
-   git clone https://github.com/Thephillyhero/Internship-Scripts-Code.git
-   cd Internship-Scripts-Code
-   ```
+python src\data\fetch_data.py `
+  --start 2018-01-01 `
+  --end 2024-12-31 `
+  --interval 1d `
+  --source auto `
+  --tickers-high "AAPL,MSFT" `
+  --tickers-mid "ZS,OKTA" `
+  --tickers-low "DUOL,IONQ" `
+  --out-dir data\raw
 
-2. **Install dependencies**
+  python src\indicators\heikin_ashi.py `
+  --tickers AAPL MSFT `
+  --interval 1d `
+  --lookback 120 `
+  --source stooq `
+  --out-plots results\plots `
+  --out-logs results\logs
 
-   pip install -r requirements.txt
-   ```
+  python src\indicators\macd_strategy.py `
+  --tickers AAPL MSFT TSLA `
+  --interval 1d `
+  --lookback 300 `
+  --source stooq `
+  --out-plots results\plots `
+  --out-logs results\logs
 
-3. **Verify environment** (optional, ensures all dependencies are installed and paths are correct)
+  python src\models\random_forest\Randomforest.py `
+  --tickers AAPL MSFT TSLA PLTR UBER FUBO RIOT `
+  --interval 1d `
+  --days 365 `
+  --future-shift 3 `
+  --profit-threshold 1.0 `
+  --model-out data\rf_trade_model.pkl `
+  --out-logs results\logs `
+  --source stooq
 
-   * On Windows:
+  python src\simulation\live_trading_simulator.py `
+  --mode backtest `
+  --tickers AAPL MSFT `
+  --interval 1d `
+  --lookback 200 `
+  --min-profit 1.0 `
+  --model-path data\rf_trade_model.pkl `
+  --source stooq `
+  --out-plots results\plots `
+  --out-logs results\logs
 
-     ```powershell
-     .\run_verify.ps1
-     ```
-   * On macOS/Linux:
+  python src\experiments\lsm_linearization.py `
+  --tickers AAPL MSFT `
+  --start 2020-01-01 `
+  --end 2024-12-31 `
+  --lsm-window 14 `
+  --lstm-window 60 `
+  --epochs 20 `
+  --batch 32 `
+  --source auto `
+  --out-dir results\lsm
 
-     ```bash
-     bash run_verify.sh
-     ```
+  python src\simulation\live_trading_simulator.py `
+  --mode backtest `
+  --tickers AAPL `
+  --interval 5m `
+  --lookback 120 `
+  --date 2025-07-31 `
+  --min-profit 1.0 `
+  --model-path data\rf_trade_model.pkl `
+  --source auto `
+  --out-plots results\plots `
+  --out-logs results\logs
 
----
 
-## 🚀 How to Run the Code
-
-### Feature Engineering
-
-#### split\_data.py
-
-Splits historical stock market data into **training**, **validation**, and **test** datasets for modeling.
-
-```bash
-python src/features/split_data.py
-```
-
-#### engineering.py
-
-Contains helper functions for generating additional features from raw stock data.
-
-```bash
-python src/features/engineering.py
-```
-
----
-
-### Modeling
-
-#### Randomforest.py
-
-Trains a Random Forest model for predicting stock market trends based on engineered features.
-
-```bash
-python src/models/random_forest/Randomforest.py
-```
-
-#### LSM\_linearization\_script.py
-
-Uses the **Least Squares Method (LSM)** to linearize historical stock price trends for analysis or as model input.
-
-```bash
-python src/models/LSM_linearization_script.py
-```
-
----
-
-### Simulation
-
-#### live\_trading\_sim.py
-
-Runs a live trading simulation using your trained model and real-time market data.
-
-```bash
-python src/simulation/live_trading_sim.py
-
-## 📌 Notes
-
-* The **archive/** folder contains older or unused scripts for reference.
-* Ensure you have a stable internet connection for scripts that fetch live or historical market data.
-* All scripts are designed to be **machine-independent** — you can run them on any system with Python and the required dependencies installed.
 
 
 
