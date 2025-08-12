@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
 """
-Patched Live/Backtest Trading Simulator
---------------------------------------
-- Fixes Yahoo Finance intraday backtest fetch by using *period*-based download
-  and then filtering locally to the requested date.
+Live/Backtest Trading Simulator (Yahoo + Stooq)
+----------------------------------------------
+- Primary source: Yahoo Finance (intraday + daily).
+- Fallback/alternative: Stooq (daily only, very reliable behind strict networks).
 - Works in both modes: --mode {live, backtest}
 - Produces plots and logs in user-provided output folders.
-- Optional RandomForest model gating (columns: Close, Volume, return).
+- Optional RandomForest model gating (features: [Close, Volume, return]).
 
 CLI (examples):
-  Backtest intraday 5m for a prior weekday:
+  Backtest intraday 5m for a prior weekday via Yahoo:
     python src/simulation/live_trading_simulator.py \
       --mode backtest --tickers AAPL MSFT --interval 5m \
       --lookback 50 --min-profit 0.5 --date 2024-07-02 \
-      --out-plots results/plots --out-logs results/logs
+      --out-plots results/plots --out-logs results/logs --source yahoo
 
-  Live (during market hours):
+  Backtest daily via Stooq (bypasses Yahoo issues):
+    python src/simulation/live_trading_simulator.py \
+      --mode backtest --tickers SPY --interval 1d \
+      --lookback 50 --min-profit 0.5 --date 2025-07-31 \
+      --out-plots results/plots --out-logs results/logs --source stooq
+
+  Live (during market hours) with automatic source (Yahoo preferred, fallback to Stooq daily):
     python src/simulation/live_trading_simulator.py \
       --mode live --tickers AAPL MSFT --interval 5m --lookback 50 \
-      --min-profit 0.5 --out-plots results/plots --out-logs results/logs
+      --min-profit 0.5 --out-plots results/plots --out-logs results/logs --source auto
 
 Notes:
-- For model gating, pass --model-path to a joblib RandomForest trained on
-  columns [Close, Volume, return]. If not provided or load fails, the
-  simulator runs without model gating and will still log/plot trades.
+- Stooq provides DAILY bars only. If you request an intraday interval with --source stooq,
+  we will downgrade to 1d and warn.
+- For model gating, pass --model-path to a joblib RandomForest trained on columns
+  [Close, Volume, return]. If not provided or load fails, the simulator runs without gating.
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import requests
 
 import matplotlib
 matplotlib.use("Agg")
@@ -71,6 +79,19 @@ def between_market_hours(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
+# ---------- Network/session hardening for Yahoo ----------
+
+def make_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    })
+    s.trust_env = True  # respect corporate proxy env vars if present
+    return s
+
+YF_SESSION = make_session()
+
+
 def fetch_intraday_period_then_filter(ticker: str, interval: str, date_str: str, period: str = "7d") -> pd.DataFrame:
     """Yahoo's intraday works more reliably with period-based queries.
     We fetch a few days then filter to the specific yyyy-mm-dd locally.
@@ -81,6 +102,7 @@ def fetch_intraday_period_then_filter(ticker: str, interval: str, date_str: str,
         interval=interval,
         auto_adjust=False,
         progress=False,
+        session=YF_SESSION,
     )
     if df.empty:
         return df
@@ -93,24 +115,17 @@ def fetch_intraday_period_then_filter(ticker: str, interval: str, date_str: str,
     return df.loc[mask]
 
 
-def fetch_data(ticker: str, mode: str, interval: str, lookback: int, date: str | None) -> pd.DataFrame:
-    """Fetches data according to mode/interval. Returns a DataFrame with DatetimeIndex.
-    - Intraday backtest: use period-based fetch then filter to the target date
-    - Daily backtest: 1y period, then take the day slice around date
-    - Live: recent period fetch (5d for intraday, 1y for daily)
-    """
+def fetch_yahoo(ticker: str, interval: str, lookback: int, date: str | None, mode: str) -> pd.DataFrame:
     if mode == "backtest":
         if is_intraday_interval(interval):
             if not date:
                 raise ValueError("--date is required for intraday backtest")
             df = fetch_intraday_period_then_filter(ticker, interval, date)
         else:
-            # Daily bars: pull 1y and slice a window ending at --date (if given) or just use last lookback bars
-            df = yf.download(ticker, period="1y", interval=interval, auto_adjust=False, progress=False)
+            df = yf.download(ticker, period="1y", interval=interval, auto_adjust=False, progress=False, session=YF_SESSION)
             if df.empty:
                 return df
             if date:
-                # Keep rows up to the given date
                 if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
                     idx = df.index.tz_convert(None)
                 else:
@@ -119,13 +134,74 @@ def fetch_data(ticker: str, mode: str, interval: str, lookback: int, date: str |
                 df = df.loc[mask]
     else:  # live
         period = "5d" if is_intraday_interval(interval) else "1y"
-        df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False)
-
+        df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False, session=YF_SESSION)
     if not isinstance(df.index, pd.DatetimeIndex):
         try:
             df.index = pd.to_datetime(df.index)
         except Exception:
             pass
+    return df
+
+
+# ---------- Stooq (daily only) ----------
+
+def stooq_symbol(ticker: str) -> str:
+    t = ticker.strip().lower()
+    # For US symbols Stooq commonly uses ".us" suffix
+    if "." not in t:
+        t = f"{t}.us"
+    return t
+
+
+def fetch_stooq_daily(ticker: str, date: str | None, lookback: int) -> pd.DataFrame:
+    sym = stooq_symbol(ticker)
+    url = f"https://stooq.com/q/d/l/?s={sym}&i=d"
+    try:
+        df = pd.read_csv(url)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty or 'Date' not in df.columns:
+        return pd.DataFrame()
+    df.rename(columns={"Open":"Open","High":"High","Low":"Low","Close":"Close","Volume":"Volume"}, inplace=True)
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df = df.dropna(subset=['Date']).set_index('Date')
+    # Keep up to date if provided, otherwise tail lookback
+    if date:
+        df = df.loc[df.index <= pd.to_datetime(date)]
+    # mimic lookback window
+    df = df.tail(max(lookback, 2))
+    return df
+
+
+def fetch_data(ticker: str, mode: str, interval: str, lookback: int, date: str | None, source: str) -> pd.DataFrame:
+    """Fetches data from the requested source with fallbacks.
+    - source=yahoo: use Yahoo only
+    - source=stooq: use Stooq (forces daily)
+    - source=auto: try Yahoo; if empty or network errors, fall back to Stooq daily
+    """
+    # If stooq and intraday requested, warn & force daily
+    if source == "stooq" and is_intraday_interval(interval):
+        warnings.warn("Stooq supports daily data only; downgrading interval to 1d.")
+        interval = "1d"
+
+    if source in ("yahoo", "auto"):
+        try:
+            df = fetch_yahoo(ticker, interval, lookback, date, mode)
+            if not df.empty:
+                return df
+            else:
+                print(f"[WARN] Yahoo returned empty for {ticker} ({interval}).")
+        except Exception as e:
+            print(f"[WARN] Yahoo error for {ticker}: {e}")
+            df = pd.DataFrame()
+        if source == "yahoo":
+            return df
+        # else fall through to stooq
+
+    # Stooq path (daily only)
+    df = fetch_stooq_daily(ticker, date, lookback)
+    if df.empty:
+        print(f"[WARN] Stooq returned empty for {ticker}.")
     return df
 
 
@@ -171,7 +247,7 @@ def find_trade(df: pd.DataFrame, lookback: int, min_profit: float) -> tuple[bool
     min_price = float(tail.at[min_idx, "Close"])
     after = tail.loc[min_idx:]
     max_idx = after["Close"].idxmax()
-    max_price = float(after.at[max_idx, "Close"])
+    max_price = float(after.at[max_idx, "Close"]) 
 
     profit = max_price - min_price
     if max_idx > min_idx and profit >= min_profit:
@@ -205,7 +281,7 @@ def plot_trade(df: pd.DataFrame, buy_ts: pd.Timestamp, sell_ts: pd.Timestamp, ti
 # ----------------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Patched live/backtest trading simulator")
+    ap = argparse.ArgumentParser(description="Live/backtest trading simulator with Yahoo + Stooq fallback")
     ap.add_argument("--mode", required=True, choices=["live", "backtest"], help="Run mode")
     ap.add_argument("--tickers", nargs="+", default=["AAPL", "MSFT"], help="List of tickers")
     ap.add_argument("--interval", default="5m", help="Yahoo interval, e.g., 1d, 1h, 5m")
@@ -215,6 +291,7 @@ def main():
     ap.add_argument("--date", default=None, help="Backtest date YYYY-MM-DD (required for intraday backtest)")
     ap.add_argument("--out-plots", default="results/plots", help="Folder to save plots")
     ap.add_argument("--out-logs", default="results/logs", help="Folder to save CSV logs")
+    ap.add_argument("--source", default="auto", choices=["yahoo", "stooq", "auto"], help="Data source")
     args = ap.parse_args()
 
     out_plots = Path(args.out_plots); ensure_dir(out_plots)
@@ -232,9 +309,10 @@ def main():
     trades_all = []
 
     for ticker in args.tickers:
-        print(f"\nFetching {ticker}...")
+        print(f"
+Fetching {ticker}...")
         try:
-            df = fetch_data(ticker, args.mode, args.interval, args.lookback, args.date)
+            df = fetch_data(ticker, args.mode, args.interval, args.lookback, args.date, args.source)
             if df.empty:
                 print(f"[WARN] No data for {ticker}.")
                 continue
@@ -249,8 +327,8 @@ def main():
                 continue
 
             # Log & plot
-            buy_ts = pd.to_datetime(trade["buy_time"])
-            sell_ts = pd.to_datetime(trade["sell_time"])
+            buy_ts = pd.to_datetime(trade["buy_time"]) 
+            sell_ts = pd.to_datetime(trade["sell_time"]) 
             print(
                 f"✅ Trade {ticker}: Buy ${trade['buy_price']:.2f} at {buy_ts.time()} → "
                 f"Sell ${trade['sell_price']:.2f} at {sell_ts.time()} | Profit ${trade['profit']:.2f} "
