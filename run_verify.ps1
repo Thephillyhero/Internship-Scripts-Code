@@ -5,7 +5,5 @@ pip install --upgrade pip
 pip install -r requirements.txt
 python src/simulation/live_trading_simulator.py --mode backtest --start 2024-07-01 --end 2024-07-05 --tickers AAPL,MSFT --save
 
-⚠ Make sure to give execute permissions for the .sh script:
 
-chmod +x run_verify.sh
 
